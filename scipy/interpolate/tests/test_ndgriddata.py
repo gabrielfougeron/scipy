@@ -6,6 +6,7 @@ from pytest import raises as assert_raises
 from scipy.interpolate import (griddata, NearestNDInterpolator,
                                LinearNDInterpolator,
                                CloughTocher2DInterpolator)
+from scipy._lib._testutils import _run_concurrent_barrier
 
 
 parametrize_interpolators = pytest.mark.parametrize(
@@ -130,7 +131,8 @@ class TestGriddata:
 
     def test_square_rescale_manual(self):
         points = np.array([(0,0), (0,100), (10,100), (10,0), (1, 5)], dtype=np.float64)
-        points_rescaled = np.array([(0,0), (0,1), (1,1), (1,0), (0.1, 0.05)], dtype=np.float64)
+        points_rescaled = np.array([(0,0), (0,1), (1,1), (1,0), (0.1, 0.05)],
+                                   dtype=np.float64)
         values = np.array([1., 2., -3., 5., 9.], dtype=np.float64)
 
         xx, yy = np.broadcast_arrays(np.linspace(0, 10, 14)[:,None],
@@ -195,6 +197,54 @@ class TestNearestNDInterpolator:
         # z is list
         NI = NearestNDInterpolator((d[0], d[1]), list(d[2]))
         assert_array_equal(NI([0.1, 0.9], [0.1, 0.9]), [0, 2])
+
+    def test_nearest_query_options(self):
+        nd = np.array([[0, 0.5, 0, 1],
+                       [0, 0, 0.5, 1],
+                       [0, 1, 1, 2]])
+        delta = 0.1
+        query_points = [0 + delta, 1 + delta], [0 + delta, 1 + delta]
+
+        # case 1 - query max_dist is smaller than
+        # the query points' nearest distance to nd.
+        NI = NearestNDInterpolator((nd[0], nd[1]), nd[2])
+        distance_upper_bound = np.sqrt(delta ** 2 + delta ** 2) - 1e-7
+        assert_array_equal(NI(query_points, distance_upper_bound=distance_upper_bound),
+                           [np.nan, np.nan])
+
+        # case 2 - query p is inf, will return [0, 2]
+        distance_upper_bound = np.sqrt(delta ** 2 + delta ** 2) - 1e-7
+        p = np.inf
+        assert_array_equal(
+            NI(query_points, distance_upper_bound=distance_upper_bound, p=p),
+            [0, 2]
+        )
+
+        # case 3 - query max_dist is larger, so should return non np.nan
+        distance_upper_bound = np.sqrt(delta ** 2 + delta ** 2) + 1e-7
+        assert_array_equal(
+            NI(query_points, distance_upper_bound=distance_upper_bound),
+            [0, 2]
+        )
+
+    def test_nearest_query_valid_inputs(self):
+        nd = np.array([[0, 1, 0, 1],
+                       [0, 0, 1, 1],
+                       [0, 1, 1, 2]])
+        NI = NearestNDInterpolator((nd[0], nd[1]), nd[2])
+        with assert_raises(TypeError):
+            NI([0.5, 0.5], query_options="not a dictionary")
+
+    def test_concurrency(self):
+        npts, nd = 50, 3
+        x = np.arange(npts * nd).reshape((npts, nd))
+        y = np.arange(npts)
+        nndi = NearestNDInterpolator(x, y)
+
+        def worker_fn(_, spl):
+            spl(x)
+
+        _run_concurrent_barrier(10, worker_fn, nndi)
 
 
 class TestNDInterpolators:

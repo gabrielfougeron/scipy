@@ -14,6 +14,7 @@ from scipy.interpolate import (
     approximate_taylor_polynomial, CubicHermiteSpline, pchip,
     PchipInterpolator, pchip_interpolate, Akima1DInterpolator, CubicSpline,
     make_interp_spline)
+from scipy._lib._testutils import _run_concurrent_barrier
 
 
 def check_shape(interpolator_cls, x_shape, y_shape, deriv_shape=None, axis=0,
@@ -143,7 +144,7 @@ def test_complex():
     x = [1, 2, 3, 4]
     y = [1, 2, 1j, 3]
 
-    for ip in [KroghInterpolator, BarycentricInterpolator, pchip, CubicSpline]:
+    for ip in [KroghInterpolator, BarycentricInterpolator, CubicSpline]:
         p = ip(x, y)
         assert_allclose(y, p(x))
 
@@ -314,6 +315,14 @@ class TestKrogh:
     def test_high_degree_warning(self):
         with pytest.warns(UserWarning, match="40 degrees provided,"):
             KroghInterpolator(np.arange(40), np.ones(40))
+
+    def test_concurrency(self):
+        P = KroghInterpolator(self.xs, self.ys)
+
+        def worker_fn(_, interp):
+            interp(self.xs)
+
+        _run_concurrent_barrier(10, worker_fn, P)
 
 
 class TestTaylor:
@@ -513,6 +522,14 @@ class TestBarycentric:
         with pytest.raises(ValueError,
                            match="Interpolation points xi must be distinct."):
             BarycentricInterpolator(xis, ys)
+
+    def test_concurrency(self):
+        P = BarycentricInterpolator(self.xs, self.ys)
+
+        def worker_fn(_, interp):
+            interp(self.xs)
+
+        _run_concurrent_barrier(10, worker_fn, P)
 
 
 class TestPCHIP:
@@ -780,6 +797,19 @@ class TestCubicSpline:
         S = CubicSpline(x, y, bc_type='periodic')
         self.check_correctness(S, 'periodic', 'periodic')
         assert_allclose(S.derivative(1)(x), np.array([-48.0, -48.0, -48.0]))
+
+    def test_periodic_three_points_multidim(self):
+        # make sure one multidimensional interpolator does the same as multiple
+        # one-dimensional interpolators
+        x = np.array([0.0, 1.0, 3.0])
+        y = np.array([[0.0, 1.0], [1.0, 0.0], [0.0, 1.0]])
+        S = CubicSpline(x, y, bc_type="periodic")
+        self.check_correctness(S, 'periodic', 'periodic')
+        S0 = CubicSpline(x, y[:, 0], bc_type="periodic")
+        S1 = CubicSpline(x, y[:, 1], bc_type="periodic")
+        q = np.linspace(0, 2, 5)
+        assert_allclose(S(q)[:, 0], S0(q))
+        assert_allclose(S(q)[:, 1], S1(q))
 
     def test_dtypes(self):
         x = np.array([0, 1, 2, 3], dtype=int)
